@@ -1,5 +1,6 @@
 import numpy as np
 import multiprocessing as mp
+from functools import partial
 
 def _bootstrap_interval(statistic, data, num_samples):
     np.random.seed()
@@ -25,7 +26,7 @@ def bootstrap_interval(statistic, data, num_samples=100000, alpha=0.05):
     return (stat[int((alpha/2.0)*num_samples)],
             stat[int((1-alpha/2.0)*num_samples)])
 
-def _permutation_test(statistic, x, y, num_samples, alternative):
+def _permutation_test(statistic, x, y, num_samples, alternative, grouped=False):
     np.random.seed()
     distribution = []
     observed_stat = statistic(x, y)
@@ -42,16 +43,25 @@ def _permutation_test(statistic, x, y, num_samples, alternative):
     else:
         return np.sum(distribution <= observed_stat)
 
-def permutation_test(statistic, x, y, num_samples=100000, alternative="two sided"):
+def _grouped_statistic_wrapper(statistic, ngroups, x, y):
+    groups = []
+
+    for i in range(ngroups + 1):
+        groups.append(y[x == i])
+
+    return statistic(*groups)
+
+def permutation_test(statistic, x, y, num_samples=100000, alternative="two sided", grouped=False):
     """Tests the independence of the statistic for the variables X and Y and returns a p-value."""
 
     assert(alternative == "lower" or alternative == "greater" or alternative == "two sided")
 
+    statistic = partial(_grouped_statistic_wrapper, statistic, np.max(x)) if grouped else statistic
     cores = mp.cpu_count()
     job_samples = num_samples/cores + 1
     pool = mp.Pool(processes=cores)
 
-    densities = [pool.apply_async(_permutation_test, args=(statistic, x, y, job_samples, alternative)) for i in range(cores)]
+    densities = [pool.apply_async(_permutation_test, args=(statistic, x, y, job_samples, alternative, grouped)) for i in range(cores)]
     densities = [density.get() for density in densities]
 
     pool.close()
@@ -70,11 +80,10 @@ def grouped_permutation_test(statistic, groups, num_samples=100000, alternative=
         idx.extend([i]*len(group))
         data.extend(group)
 
-    return permutation_test(statistic, np.array(idx), np.array(data), num_samples, alternative)
-
+    return permutation_test(statistic, np.array(idx), np.array(data), num_samples, alternative, True)
 
 def _median_difference(x, y):
-    return np.median(y[x == 0]) - np.median(y[x == 1])
+    return np.median(x) - np.median(y)
 
 if __name__ == "__main__":
     x1 = np.array([0.80, 0.83, 1.89, 1.04, 1.45, 1.38, 1.91, 1.64, 0.73, 1.46])
