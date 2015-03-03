@@ -1,6 +1,8 @@
 import numpy as np
 import multiprocessing as mp
+
 from functools import partial
+from scipy.stats import norm
 
 def _bootstrap_interval(statistic, data, num_samples):
     np.random.seed()
@@ -9,8 +11,15 @@ def _bootstrap_interval(statistic, data, num_samples):
     samples = data[idx]
     return [statistic(sample) for sample in samples]
 
+def _jackknife_indexes(data):
+    base = np.arange(0, len(data))
+    return (np.delete(base, i) for i in base)
+
 def bootstrap_interval(statistic, data, num_samples=100000, alpha=0.05):
-    """Returns a confidence interval for the specified statistic."""
+    """
+    Returns a confidence interval for the specified statistic. Uses the BCA
+    algorithm, see An Introduction to the Bootstrap. Chapman & Hall 1993.
+    """
 
     cores = mp.cpu_count()
     pool = mp.Pool(processes=cores)
@@ -19,12 +28,28 @@ def bootstrap_interval(statistic, data, num_samples=100000, alpha=0.05):
     stat = [pool.apply_async(_bootstrap_interval, args=(statistic, data, job_samples)) for i in range(cores)]
     stat = [s.get() for s in stat]
     stat = np.sort([item for list in stat for item in list])
+    num_samples = len(stat)
 
     pool.close()
     pool.join()
 
-    return (stat[int((alpha/2.0)*num_samples)],
-            stat[int((1-alpha/2.0)*num_samples)])
+    # Compute the bias correction, i.e. the discrepancy between the median of the
+    # bootstrap distribution and the original median of the sample, in normal units.
+    z0 = norm.ppf(np.sum(stat < statistic(data))/float(num_samples))
+
+    # Jackknife statistics
+    jindexes = _jackknife_indexes(data)
+    jstat = [statistic(data[index]) for index in jindexes]
+    jmean = np.mean(jstat)
+
+    # Compute the acceleration value, i.e. the rate of change of the standard error
+    # of jstat with respect to the true parameter value.
+    a = np.sum((jmean - jstat)**3)/(6.0*np.sum((jmean - jstat)**2)**1.5)
+
+    alphas = np.array((alpha/2, 1 - alpha/2))
+    zs = z0 + norm.ppf(alphas).reshape(alphas.shape+(1,)*z0.ndim)
+    avals = norm.cdf(z0 + zs/(1-a*zs))
+    return stat[(avals*num_samples).astype(int)]
 
 def _permutation_test(statistic, x, y, num_samples, alternative, grouped=False):
     np.random.seed()
