@@ -84,6 +84,7 @@ def permutation_test(statistic, x, y, num_samples=100000, alternative="two sided
     statistic = partial(_grouped_statistic_wrapper, statistic, np.max(x)) if grouped else statistic
     cores = mp.cpu_count()
     job_samples = num_samples/cores + 1
+    num_samples = job_samples * cores
     pool = mp.Pool(processes=cores)
 
     densities = [pool.apply_async(_permutation_test, args=(statistic, x, y, job_samples, alternative, grouped)) for i in range(cores)]
